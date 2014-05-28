@@ -1,5 +1,6 @@
 import java.io.FileOutputStream
 import org.apache.poi.hssf.usermodel.{HSSFSheet, HSSFWorkbook}
+import org.apache.poi.ss.usermodel.{Font, CellStyle}
 import scala.xml.{NodeSeq, XML}
 
 /**
@@ -14,6 +15,7 @@ object Opml2Excel extends App {
   }
 
   case class Column(name: String, values: List[ColumnValue]) {
+
     def getValue(rowNum: Int) = {
       val a = values.filter(_.rowNum == rowNum)
       if (a.isEmpty) {
@@ -22,6 +24,10 @@ object Opml2Excel extends App {
         a.head.value
       }
     }
+
+    def isNumeric =
+      values.forall(_.value.matches(s"""[+-]?((\d+(e\d+)?[lL]?)|(((\d+(\.\d*)?)|(\.\d+))(e\d+)?[fF]?))"""))
+
   }
 
   case class ColumnValue(rowNum: Int, value: String)
@@ -37,7 +43,7 @@ object Opml2Excel extends App {
       n.attributes foreach { attr =>
         if (attr.key != "text") {
           if (columns.contains(attr.key)) {
-            columns(attr.key).values :+ attr.value.text
+            columns(attr.key) = Column(attr.key, columns(attr.key).values :+ ColumnValue(i, attr.value.text))
           } else {
             columns(attr.key) = Column(attr.key, List(ColumnValue(i, attr.value.text)))
           }
@@ -52,57 +58,116 @@ object Opml2Excel extends App {
     (rows, i - rowNum)
   }
 
+  val letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
   var i = 1
 
-  def writeRows(sheet: HSSFSheet, rows: Seq[Row]): Unit = {
+  def writeRows(sheet: HSSFSheet, rows: Seq[Row]): Int = {
+    var j = 0
     rows foreach { r =>
       if (r.rowNum > 0) {
         val row = sheet.createRow(r.rowNum)
-        val nameCell = row.createCell(0)
-        nameCell.setCellValue(" " * r.level * 4 + r.name)
+        val titleStyle = getStyle(sheet.getWorkbook, r.level)
+        val colStyle = sheet.getWorkbook.createCellStyle()
+        colStyle.setWrapText(true)
+        colStyle.setVerticalAlignment(CellStyle.VERTICAL_TOP)
+        val titleCell = row.createCell(0)
+        titleCell.setCellValue(r.name)
+        titleCell.setCellStyle(titleStyle)
         i = 1
         columns.values foreach { c =>
           val cell = row.createCell(i)
-          cell.setCellValue(c.getValue(r.rowNum))
+          val numberChildren = r.children.length
+          if (false && numberChildren > 0 && c.isNumeric) {
+            val colRef = letters(i - 1)
+            val formula = "SUM(" + colRef + r.rowNum + ":" + colRef + r.rowNum + numberChildren + ")"
+            cell.setCellFormula(formula)
+          } else {
+            if (c.name == "_note") {
+              cell.setCellStyle(colStyle)
+            }
+            cell.setCellValue(c.getValue(r.rowNum))
+          }
           i += 1
         }
       }
       if (!r.children.isEmpty) {
-        writeRows(sheet, r.children)
-        sheet.groupRow(r.rowNum + 1, r.rowNum + r.children.length)
+        val k = writeRows(sheet, r.children)
+        if (r.rowNum > 0) {
+          sheet.groupRow(r.rowNum + 1, r.rowNum + k)
+        }
+        j += k + 1
+      } else {
+        j += 1
       }
+    }
+    j
+  }
+
+  var styles = collection.mutable.Map[Int, CellStyle]()
+
+  def getStyle(wb: HSSFWorkbook, indent: Int) = {
+    if (styles.contains(indent)) {
+      styles(indent)
+    } else {
+      val style = wb.createCellStyle()
+      style.setWrapText(true)
+      style.setVerticalAlignment(CellStyle.VERTICAL_TOP)
+      style.setIndention(indent.toShort)
+      styles(indent) = style
+      style
     }
   }
 
-  def writeExcel(title: String, rows: Seq[Row]) = {
+  def writeExcel(title: String, rows: Seq[Row], filename: String) = {
     val wb = new HSSFWorkbook()
     val sheet = wb.createSheet(title)
     sheet.setRowSumsBelow(false)
+    val headerStyle = wb.createCellStyle()
+    val headerFont = wb.createFont()
+    headerFont.setBoldweight(Font.BOLDWEIGHT_BOLD)
+    headerStyle.setFont(headerFont)
     val headerRow = sheet.createRow(0)
     val nameCell = headerRow.createCell(0)
     nameCell.setCellValue("Title")
+    nameCell.setCellStyle(headerStyle)
     columns.keys foreach { colName =>
       val cell = headerRow.createCell(i)
-      cell.setCellValue(colName)
+      if (colName == "_note") {
+        cell.setCellValue("Notes")
+      } else {
+        cell.setCellValue(colName)
+      }
+      cell.setCellStyle(headerStyle)
       i += 1
     }
     writeRows(sheet, rows)
-    val out = new FileOutputStream("test.xls")
+    sheet.setColumnWidth(0, 60*256)
+    sheet.setColumnWidth(1, 60*256)
+    val out = new FileOutputStream(filename)
     wb.write(out)
     out.close()
   }
 
   println("Converting OPML file to Excel")
   //println(args(0))
-  //val xml = XML.loadFile(args(0))
-  val xml = XML.loadFile("/Users/markmo/Documents/ANZ Systems Integration.opml")
+  val infilename = args(0)
+  val xml = XML.loadFile(infilename)
+  val outfilename = infilename.slice(0, infilename.length - 4) + "xls"
+  //val xml = XML.loadFile("/Users/markmo/Documents/ANZ Systems Integration.opml")
   val title = (xml \ "head" \ "title").text
   println(title)
   //println(xml)
   val (rows, k) = parseOpml(xml \ "body", 0, -1)
+  /*
   rows foreach { row =>
     println(row)
   }
-  writeExcel(title, rows)
+  columns foreach {
+    case (name, column) =>
+      column.values foreach { v =>
+        println(v.rowNum + ": " + v.value)
+      }
+  }*/
+  writeExcel(title, rows, outfilename)
 
 }
