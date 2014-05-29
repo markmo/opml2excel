@@ -26,9 +26,18 @@ object Opml2Excel extends App {
     }
 
     def isNumeric =
-      values.forall(_.value.matches(s"""[+-]?((\d+(e\d+)?[lL]?)|(((\d+(\.\d*)?)|(\.\d+))(e\d+)?[fF]?))"""))
+      values.forall((x) => Opml2Excel.isNumeric(x.value))
 
   }
+
+  def isNumeric(x: String) = {
+    if (x == null || x.isEmpty) {
+      false
+    } else {
+      x.matches(s"""[+-]?((\\d+(e\\d+)?[lL]?)|(((\\d+(\\.\\d*)?)|(\\.\\d+))(e\\d+)?[fF]?))""")
+    }
+  }
+
 
   case class ColumnValue(rowNum: Int, value: String)
 
@@ -85,7 +94,12 @@ object Opml2Excel extends App {
             if (c.name == "_note") {
               cell.setCellStyle(colStyle)
             }
-            cell.setCellValue(c.getValue(r.rowNum))
+            val v = c.getValue(r.rowNum)
+            if (isNumeric(v)) {
+              cell.setCellValue(v.toDouble)
+            } else {
+              cell.setCellValue(v)
+            }
           }
           i += 1
         }
